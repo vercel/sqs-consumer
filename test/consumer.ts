@@ -599,16 +599,15 @@ describe('Consumer', () => {
         attributeNames: ['ApproximateReceiveCount'],
         region: 'some-region',
         handleMessage,
-        sqs
+        sqs,
+        terminateVisibilityTimeout: (message: SQSMessage) => {
+          const receiveCount = Number.parseInt(message.Attributes?.ApproximateReceiveCount || '1') || 1;
+          // Add visibility timeout to (10 * receiveCount) seconds
+          return receiveCount * 10;
+        }
       });
 
       handleMessage.rejects(new Error('Processing error'));
-
-      consumer.terminateVisibilityTimeout = (message: SQSMessage) => {
-        const receiveCount = Number.parseInt(message.Attributes?.ApproximateReceiveCount || '1') || 1;
-        // Add visibility timeout to (10 * receiveCount) seconds
-        return receiveCount * 10;
-      };
 
       consumer.start();
       await pEvent(consumer, 'processing_error');
