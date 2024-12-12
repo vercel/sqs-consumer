@@ -2,7 +2,7 @@ import { assert } from 'chai';
 import * as pEvent from 'p-event';
 
 import * as sinon from 'sinon';
-import { Consumer } from '../src/index';
+import { Consumer, SQSMessage } from '../src/index';
 
 const sandbox = sinon.createSandbox();
 
@@ -46,7 +46,10 @@ describe('Consumer', () => {
     Messages: [{
       ReceiptHandle: 'receipt-handle',
       MessageId: '123',
-      Body: 'body'
+      Body: 'body',
+      Attributes: {
+
+      }
     }]
   };
 
@@ -574,6 +577,47 @@ describe('Consumer', () => {
         QueueUrl: 'some-queue-url',
         ReceiptHandle: 'receipt-handle',
         VisibilityTimeout: 0
+      });
+    });
+
+    it('terminate message visibility timeout with a function to calculate timeout on processing error', async () => {
+      const messageWithAttr = {
+        ReceiptHandle: 'receipt-handle-2',
+        MessageId: '1',
+        Body: 'body-2',
+        Attributes: {
+          ApproximateReceiveCount: 2
+        }
+      };
+
+      sqs.receiveMessage = stubResolve({
+        Messages: [messageWithAttr]
+      });
+
+      consumer = new Consumer({
+        queueUrl: 'some-queue-url',
+        attributeNames: ['ApproximateReceiveCount'],
+        region: 'some-region',
+        handleMessage,
+        sqs
+      });
+
+      handleMessage.rejects(new Error('Processing error'));
+
+      consumer.terminateVisibilityTimeout = (message: SQSMessage) => {
+        const receiveCount = Number.parseInt(message.Attributes?.ApproximateReceiveCount || '1') || 1;
+        // Add visibility timeout to (10 * receiveCount) seconds
+        return receiveCount * 10;
+      };
+
+      consumer.start();
+      await pEvent(consumer, 'processing_error');
+      consumer.stop();
+
+      sandbox.assert.calledWith(sqs.changeMessageVisibility, {
+        QueueUrl: 'some-queue-url',
+        ReceiptHandle: 'receipt-handle-2',
+        VisibilityTimeout: 20
       });
     });
 
