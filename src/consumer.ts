@@ -83,7 +83,7 @@ export interface ConsumerOptions {
   waitTimeSeconds?: number;
   authenticationErrorTimeout?: number;
   pollingWaitTimeMs?: number;
-  terminateVisibilityTimeout?: boolean;
+  terminateVisibilityTimeout?: boolean | ((message: SQSMessage) => number);
   heartbeatInterval?: number;
   sqs?: SQS;
   region?: string;
@@ -132,7 +132,7 @@ export class Consumer extends EventEmitter {
   private waitTimeSeconds: number;
   private authenticationErrorTimeout: number;
   private pollingWaitTimeMs: number;
-  private terminateVisibilityTimeout: boolean;
+  private terminateVisibilityTimeout: boolean | ((message: SQSMessage) => number);
   private heartbeatInterval: number;
   private sqs: SQS;
   private preReceiveMessageCallback?: () => Promise<void>;
@@ -225,7 +225,7 @@ export class Consumer extends EventEmitter {
     try {
       if (this.heartbeatInterval) {
         heartbeat = this.startHeartbeat(async (elapsedSeconds) => {
-          return this.changeVisabilityTimeout(message, elapsedSeconds + this.visibilityTimeout);
+          return this.changeVisibilityTimeout(message, elapsedSeconds + this.visibilityTimeout);
         });
       }
       await this.executeHandler(message);
@@ -235,7 +235,12 @@ export class Consumer extends EventEmitter {
       this.emitError(err, message);
 
       if (this.terminateVisibilityTimeout) {
-        await this.changeVisabilityTimeout(message, 0);
+        if (typeof this.terminateVisibilityTimeout === 'function') {
+          const visibilityTimeout = this.terminateVisibilityTimeout(message);
+          await this.changeVisibilityTimeout(message, visibilityTimeout);
+        } else {
+          await this.changeVisibilityTimeout(message, 0);
+        }
       }
     } finally {
       clearInterval(heartbeat);
@@ -303,7 +308,7 @@ export class Consumer extends EventEmitter {
     }
   }
 
-  private async changeVisabilityTimeout(message: SQSMessage, timeout: number): Promise<PromiseResult<any, AWSError>> {
+  private async changeVisibilityTimeout(message: SQSMessage, timeout: number): Promise<PromiseResult<any, AWSError>> {
     try {
       return this.sqs
         .changeMessageVisibility({
@@ -369,7 +374,7 @@ export class Consumer extends EventEmitter {
     try {
       if (this.heartbeatInterval) {
         heartbeat = this.startHeartbeat(async (elapsedSeconds) => {
-          return this.changeVisabilityTimeoutBatch(messages, elapsedSeconds + this.visibilityTimeout);
+          return this.changeVisibilityTimeoutBatch(messages, () => elapsedSeconds + this.visibilityTimeout);
         });
       }
       await this.executeBatchHandler(messages);
@@ -381,7 +386,11 @@ export class Consumer extends EventEmitter {
       this.emit('error', err, messages);
 
       if (this.terminateVisibilityTimeout) {
-        await this.changeVisabilityTimeoutBatch(messages, 0);
+        if (typeof this.terminateVisibilityTimeout === 'function') {
+          await this.changeVisibilityTimeoutBatch(messages, this.terminateVisibilityTimeout);
+        } else {
+          await this.changeVisibilityTimeoutBatch(messages, () => 0);
+        }
       }
     } finally {
       clearInterval(heartbeat);
@@ -417,13 +426,13 @@ export class Consumer extends EventEmitter {
     }
   }
 
-  private async changeVisabilityTimeoutBatch(messages: SQSMessage[], timeout: number): Promise<PromiseResult<any, AWSError>> {
+  private async changeVisibilityTimeoutBatch(messages: SQSMessage[], getTimeout: (message: SQSMessage) => number): Promise<PromiseResult<any, AWSError>> {
     const params = {
       QueueUrl: this.queueUrl,
       Entries: messages.map((message) => ({
         Id: message.MessageId,
         ReceiptHandle: message.ReceiptHandle,
-        VisibilityTimeout: timeout
+        VisibilityTimeout: getTimeout(message)
       }))
     };
     try {
