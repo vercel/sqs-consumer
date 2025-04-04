@@ -19,12 +19,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/BBC/sqs-consumer.git"
+    "url": "https://github.com/vercel/sqs-consumer.git"
   },
   "bugs": {
-    "url": "https://github.com/BBC/sqs-consumer/issues"
+    "url": "https://github.com/vercel/sqs-consumer/issues"
   },
-  "homepage": "https://github.com/BBC/sqs-consumer",
+  "homepage": "https://github.com/vercel/sqs-consumer",
   "keywords": [
     "sqs",
     "queue",
