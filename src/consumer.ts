@@ -226,7 +226,7 @@ export class Consumer extends EventEmitter {
       if (this.heartbeatInterval) {
         heartbeat = this.startHeartbeat(async (elapsedSeconds) => {
           return this.changeVisibilityTimeout(message, elapsedSeconds + this.visibilityTimeout);
-        });
+        }, message);
       }
       await this.executeHandler(message);
       await this.deleteMessage(message);
@@ -235,11 +235,15 @@ export class Consumer extends EventEmitter {
       this.emitError(err, message);
 
       if (this.terminateVisibilityTimeout) {
-        if (typeof this.terminateVisibilityTimeout === 'function') {
-          const visibilityTimeout = this.terminateVisibilityTimeout(message);
-          await this.changeVisibilityTimeout(message, visibilityTimeout);
-        } else {
-          await this.changeVisibilityTimeout(message, 0);
+        try {
+          if (typeof this.terminateVisibilityTimeout === 'function') {
+            const visibilityTimeout = this.terminateVisibilityTimeout(message);
+            await this.changeVisibilityTimeout(message, visibilityTimeout);
+          } else {
+            await this.changeVisibilityTimeout(message, 0);
+          }
+        } catch (err) {
+          this.emit('error', err, message);
         }
       }
     } finally {
@@ -309,17 +313,13 @@ export class Consumer extends EventEmitter {
   }
 
   private async changeVisibilityTimeout(message: SQSMessage, timeout: number): Promise<PromiseResult<any, AWSError>> {
-    try {
-      return this.sqs
-        .changeMessageVisibility({
-          QueueUrl: this.queueUrl,
-          ReceiptHandle: message.ReceiptHandle,
-          VisibilityTimeout: timeout
-        })
-        .promise();
-    } catch (err) {
-      this.emit('error', err, message);
-    }
+    return this.sqs
+      .changeMessageVisibility({
+        QueueUrl: this.queueUrl,
+        ReceiptHandle: message.ReceiptHandle,
+        VisibilityTimeout: timeout
+      })
+      .promise();
   }
 
   private emitError(err: Error, message: SQSMessage): void {
@@ -375,7 +375,7 @@ export class Consumer extends EventEmitter {
       if (this.heartbeatInterval) {
         heartbeat = this.startHeartbeat(async (elapsedSeconds) => {
           return this.changeVisibilityTimeoutBatch(messages, () => elapsedSeconds + this.visibilityTimeout);
-        });
+        }, messages);
       }
       await this.executeBatchHandler(messages);
       await this.deleteMessageBatch(messages);
@@ -386,10 +386,14 @@ export class Consumer extends EventEmitter {
       this.emit('error', err, messages);
 
       if (this.terminateVisibilityTimeout) {
-        if (typeof this.terminateVisibilityTimeout === 'function') {
-          await this.changeVisibilityTimeoutBatch(messages, this.terminateVisibilityTimeout);
-        } else {
-          await this.changeVisibilityTimeoutBatch(messages, () => 0);
+        try {
+          if (typeof this.terminateVisibilityTimeout === 'function') {
+            await this.changeVisibilityTimeoutBatch(messages, this.terminateVisibilityTimeout);
+          } else {
+            await this.changeVisibilityTimeoutBatch(messages, () => 0);
+          }
+        } catch (err) {
+          this.emit('error', err, messages);
         }
       }
     } finally {
@@ -435,20 +439,18 @@ export class Consumer extends EventEmitter {
         VisibilityTimeout: getTimeout(message)
       }))
     };
-    try {
-      return this.sqs
-        .changeMessageVisibilityBatch(params)
-        .promise();
-    } catch (err) {
-      this.emit('error', err, messages);
-    }
+    return this.sqs
+      .changeMessageVisibilityBatch(params)
+      .promise();
   }
 
-  private startHeartbeat(heartbeatFn: (elapsedSeconds: number) => void): NodeJS.Timeout {
+  private startHeartbeat(heartbeatFn: (elapsedSeconds: number) => Promise<void>, message: SQSMessage | SQSMessage[]): NodeJS.Timeout {
     const startTime = Date.now();
     return setInterval(() => {
       const elapsedSeconds = Math.ceil((Date.now() - startTime) / 1000);
-      heartbeatFn(elapsedSeconds);
+      heartbeatFn(elapsedSeconds).catch((err) => {
+        this.emit('error', err, message);
+      });
     }, this.heartbeatInterval * 1000);
   }
 }

@@ -759,6 +759,108 @@ describe('Consumer', () => {
       });
       sandbox.assert.calledOnce(clearIntervalSpy);
     });
+
+    it('emits error event when heartbeat fails due to invalid receipt handle', async () => {
+      const heartbeatError = new Error(
+        'Value xyz for parameter ReceiptHandle is invalid. Reason: Message does not exist or is not available for visibility timeout change.'
+      );
+      sqs.changeMessageVisibility = stubReject(heartbeatError);
+
+      consumer = new Consumer({
+        queueUrl: 'some-queue-url',
+        region: 'some-region',
+        handleMessage: () => new Promise((resolve) => setTimeout(resolve, 75000)),
+        sqs,
+        visibilityTimeout: 40,
+        heartbeatInterval: 30
+      });
+
+      let emittedError: Error | undefined;
+      let emittedMessage: any;
+      consumer.on('error', (err, msg) => {
+        emittedError = err;
+        emittedMessage = msg;
+      });
+
+      consumer.start();
+      await clock.tickAsync(30001);
+      consumer.stop();
+
+      assert.ok(emittedError);
+      assert.equal(emittedError!.message, heartbeatError.message);
+      assert.equal(emittedMessage.ReceiptHandle, 'receipt-handle');
+    });
+
+    it('emits error event when batch heartbeat fails due to invalid receipt handle', async () => {
+      const heartbeatError = new Error(
+        'Value xyz for parameter ReceiptHandle is invalid. Reason: Message does not exist or is not available for visibility timeout change.'
+      );
+      sqs.receiveMessage = stubResolve({
+        Messages: [
+          { MessageId: '1', ReceiptHandle: 'receipt-handle-1', Body: 'body-1' },
+          { MessageId: '2', ReceiptHandle: 'receipt-handle-2', Body: 'body-2' }
+        ]
+      });
+      sqs.changeMessageVisibilityBatch = stubReject(heartbeatError);
+
+      consumer = new Consumer({
+        queueUrl: 'some-queue-url',
+        region: 'some-region',
+        handleMessageBatch: () => new Promise((resolve) => setTimeout(resolve, 75000)),
+        batchSize: 2,
+        sqs,
+        visibilityTimeout: 40,
+        heartbeatInterval: 30
+      });
+
+      let emittedError: Error | undefined;
+      let emittedMessages: any;
+      consumer.on('error', (err, msgs) => {
+        emittedError = err;
+        emittedMessages = msgs;
+      });
+
+      consumer.start();
+      await clock.tickAsync(30001);
+      consumer.stop();
+
+      assert.ok(emittedError);
+      assert.equal(emittedError!.message, heartbeatError.message);
+      assert.isArray(emittedMessages);
+      assert.equal(emittedMessages.length, 2);
+    });
+
+    it('does not crash when heartbeat error occurs', async () => {
+      const heartbeatError = new Error(
+        'Value xyz for parameter ReceiptHandle is invalid. Reason: Message does not exist.'
+      );
+      sqs.changeMessageVisibility = stubReject(heartbeatError);
+
+      consumer = new Consumer({
+        queueUrl: 'some-queue-url',
+        region: 'some-region',
+        handleMessage: () => new Promise((resolve) => setTimeout(resolve, 75000)),
+        sqs,
+        visibilityTimeout: 40,
+        heartbeatInterval: 30
+      });
+
+      const errors: Error[] = [];
+      consumer.on('error', (err) => {
+        errors.push(err);
+      });
+
+      consumer.start();
+      // Tick past multiple heartbeats - all should be caught and emitted
+      await clock.tickAsync(65000);
+      consumer.stop();
+
+      // Multiple heartbeat errors should have been emitted (at 30s and 60s)
+      assert.isAtLeast(errors.length, 2);
+      errors.forEach((err) => {
+        assert.equal(err.message, heartbeatError.message);
+      });
+    });
   });
 
   describe('.stop', () => {
