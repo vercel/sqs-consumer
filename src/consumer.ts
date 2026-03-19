@@ -353,7 +353,7 @@ export class Consumer extends EventEmitter {
     this.receiveMessage(receiveParams)
       .then(this.handleSqsResponse)
       .catch((err) => {
-        this.emit('error', err, undefined);
+        this.emit('error', err);
         if (isConnectionError(err)) {
           debug('There was an authentication error. Pausing before retrying.');
           currentPollingTimeout = this.authenticationErrorTimeout;
@@ -362,7 +362,7 @@ export class Consumer extends EventEmitter {
       }).then(() => {
         setTimeout(this.poll, currentPollingTimeout);
       }).catch((err) => {
-        this.emit('error', err, undefined);
+        this.emit('error', err);
       });
   }
 
