@@ -308,17 +308,21 @@ export class Consumer extends EventEmitter {
     }
   }
 
-  private async changeVisibilityTimeout(message: SQSMessage, timeout: number): Promise<PromiseResult<any, AWSError>> {
+  private async changeVisibilityTimeout(message: SQSMessage, timeout: number): Promise<boolean> {
     try {
-      return this.sqs
+      // Use await so async SQS failures are caught here instead of escaping the
+      // try/catch as unhandled rejections from the heartbeat timer.
+      await this.sqs
         .changeMessageVisibility({
           QueueUrl: this.queueUrl,
           ReceiptHandle: message.ReceiptHandle,
           VisibilityTimeout: timeout
         })
         .promise();
+      return true;
     } catch (err) {
-      this.emit('error', err, message);
+      this.emit('error', toSQSError(err, `SQS change visibility timeout failed: ${err.message}`), message);
+      return false;
     }
   }
 
@@ -426,7 +430,7 @@ export class Consumer extends EventEmitter {
     }
   }
 
-  private async changeVisibilityTimeoutBatch(messages: SQSMessage[], getTimeout: (message: SQSMessage) => number): Promise<PromiseResult<any, AWSError>> {
+  private async changeVisibilityTimeoutBatch(messages: SQSMessage[], getTimeout: (message: SQSMessage) => number): Promise<boolean> {
     const params = {
       QueueUrl: this.queueUrl,
       Entries: messages.map((message) => ({
@@ -436,19 +440,33 @@ export class Consumer extends EventEmitter {
       }))
     };
     try {
-      return this.sqs
+      await this.sqs
         .changeMessageVisibilityBatch(params)
         .promise();
+      return true;
     } catch (err) {
-      this.emit('error', err, messages);
+      this.emit('error', toSQSError(err, `SQS change visibility timeout failed: ${err.message}`), messages);
+      return false;
     }
   }
 
-  private startHeartbeat(heartbeatFn: (elapsedSeconds: number) => void): NodeJS.Timeout {
+  private startHeartbeat(heartbeatFn: (elapsedSeconds: number) => Promise<boolean>): NodeJS.Timeout {
     const startTime = Date.now();
-    return setInterval(() => {
+    const interval = setInterval(() => {
       const elapsedSeconds = Math.ceil((Date.now() - startTime) / 1000);
-      heartbeatFn(elapsedSeconds);
+      // The heartbeat callback is async. Catch rejections explicitly so timer
+      // failures do not surface as unhandled promise rejections.
+      void heartbeatFn(elapsedSeconds)
+        .then((shouldContinue) => {
+          if (shouldContinue === false) {
+            clearInterval(interval);
+          }
+        })
+        .catch((err) => {
+          clearInterval(interval);
+          this.emit('error', err, undefined);
+        });
     }, this.heartbeatInterval * 1000);
+    return interval;
   }
 }

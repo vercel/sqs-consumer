@@ -759,6 +759,90 @@ describe('Consumer', () => {
       });
       sandbox.assert.calledOnce(clearIntervalSpy);
     });
+
+    it('emits an error and stops heartbeats when a heartbeat visibility update fails', async () => {
+      const sqsError = new MockSQSError('Message does not exist or is not available for visibility timeout change');
+      sqsError.code = 'InvalidParameterValue';
+      sqs.changeMessageVisibility = stubReject(sqsError);
+
+      consumer = new Consumer({
+        queueUrl: 'some-queue-url',
+        region: 'some-region',
+        handleMessage: () => new Promise((resolve) => setTimeout(resolve, 75000)),
+        sqs,
+        visibilityTimeout: 40,
+        heartbeatInterval: 30
+      });
+
+      const onUnhandledRejection = sandbox.spy();
+      function unhandledRejectionListener(err: Error) {
+        onUnhandledRejection(err);
+      }
+      process.on('unhandledRejection', unhandledRejectionListener);
+
+      consumer.start();
+      try {
+        const result: any = await Promise.all([pEvent(consumer, 'error', { multiArgs: true }), clock.tickAsync(30000)]);
+        const [err, message] = result[0];
+
+        await Promise.all([pEvent(consumer, 'response_processed'), clock.tickAsync(45000)]);
+
+        assert.equal(err.name, 'SQSError');
+        assert.equal(err.message, `SQS change visibility timeout failed: ${sqsError.message}`);
+        assert.equal(message, response.Messages[0]);
+        sandbox.assert.calledOnce(sqs.changeMessageVisibility);
+        sandbox.assert.notCalled(onUnhandledRejection);
+      } finally {
+        process.removeListener('unhandledRejection', unhandledRejectionListener);
+        consumer.stop();
+      }
+    });
+
+    it('emits an error and stops batch heartbeats when a heartbeat visibility update fails', async () => {
+      const batchMessages = [
+        { MessageId: '1', ReceiptHandle: 'receipt-handle-1', Body: 'body-1' },
+        { MessageId: '2', ReceiptHandle: 'receipt-handle-2', Body: 'body-2' },
+        { MessageId: '3', ReceiptHandle: 'receipt-handle-3', Body: 'body-3' }
+      ];
+      const sqsError = new MockSQSError('Message does not exist or is not available for visibility timeout change');
+      sqsError.code = 'InvalidParameterValue';
+      sqs.changeMessageVisibilityBatch = stubReject(sqsError);
+      sqs.receiveMessage = stubResolve({
+        Messages: batchMessages
+      });
+      consumer = new Consumer({
+        queueUrl: 'some-queue-url',
+        region: 'some-region',
+        handleMessageBatch: () => new Promise((resolve) => setTimeout(resolve, 75000)),
+        batchSize: 3,
+        sqs,
+        visibilityTimeout: 40,
+        heartbeatInterval: 30
+      });
+
+      const onUnhandledRejection = sandbox.spy();
+      function unhandledRejectionListener(err: Error) {
+        onUnhandledRejection(err);
+      }
+      process.on('unhandledRejection', unhandledRejectionListener);
+
+      consumer.start();
+      try {
+        const result: any = await Promise.all([pEvent(consumer, 'error', { multiArgs: true }), clock.tickAsync(30000)]);
+        const [err, messages] = result[0];
+
+        await Promise.all([pEvent(consumer, 'response_processed'), clock.tickAsync(45000)]);
+
+        assert.equal(err.name, 'SQSError');
+        assert.equal(err.message, `SQS change visibility timeout failed: ${sqsError.message}`);
+        assert.deepEqual(messages, batchMessages);
+        sandbox.assert.calledOnce(sqs.changeMessageVisibilityBatch);
+        sandbox.assert.notCalled(onUnhandledRejection);
+      } finally {
+        process.removeListener('unhandledRejection', unhandledRejectionListener);
+        consumer.stop();
+      }
+    });
   });
 
   describe('.stop', () => {
