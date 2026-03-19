@@ -310,6 +310,8 @@ export class Consumer extends EventEmitter {
 
   private async changeVisibilityTimeout(message: SQSMessage, timeout: number): Promise<boolean> {
     try {
+      // Use await so async SQS failures are caught here instead of escaping the
+      // try/catch as unhandled rejections from the heartbeat timer.
       await this.sqs
         .changeMessageVisibility({
           QueueUrl: this.queueUrl,
@@ -452,6 +454,8 @@ export class Consumer extends EventEmitter {
     const startTime = Date.now();
     const interval = setInterval(() => {
       const elapsedSeconds = Math.ceil((Date.now() - startTime) / 1000);
+      // The heartbeat callback is async. Catch rejections explicitly so timer
+      // failures do not surface as unhandled promise rejections.
       void heartbeatFn(elapsedSeconds)
         .then((shouldContinue) => {
           if (shouldContinue === false) {
